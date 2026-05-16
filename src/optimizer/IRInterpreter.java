@@ -17,6 +17,28 @@ public class IRInterpreter {
 
         Stats stats = irInterpreter.getStats();
         System.err.println("Number of non-label instructions executed: " + stats.getNonLabelInstructionCount());
+
+        // Per-opcode breakdown (machine-readable; consumed by lcm_tests/run_tests.{ps1,sh}).
+        StringBuilder breakdown = new StringBuilder("Per-opcode counts:");
+        int assignCount = 0;
+        for (IRInstruction.OpCode op : IRInstruction.OpCode.values()) {
+            int count = stats.instructionCounts.getOrDefault(op, 0);
+            if (count > 0) {
+                breakdown.append(' ').append(op).append('=').append(count);
+            }
+            if (op == IRInstruction.OpCode.ASSIGN) {
+                assignCount = count;
+            }
+        }
+        System.err.println(breakdown);
+
+        // PRE / LCM literature speaks of "operation count" — arithmetic, memory, branches,
+        // and calls — and treats register copies (ASSIGN) as essentially free, since the
+        // back-end either coalesces them into MIPS register-to-register moves or fuses them
+        // away. Surface that as a stand-alone, easy-to-grep line so test runners can use it
+        // without having to re-parse the per-opcode breakdown above.
+        int opCount = stats.getNonLabelInstructionCount() - assignCount;
+        System.err.println("Operation count (excludes LABEL and ASSIGN): " + opCount);
     }
 
     private class StackFrame {

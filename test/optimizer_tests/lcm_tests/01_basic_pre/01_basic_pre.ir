@@ -1,0 +1,22 @@
+#start_function
+void main():
+int-list: a, b, c, t1, t2, t3, r
+float-list:
+    callr, c, geti
+    assign, a, 7
+    assign, b, 3
+    goto, BRANCH
+BRANCH:
+    brneq, ELSE, c, 0
+    add, t1, a, b
+    assign, r, t1
+    goto, JOIN
+ELSE:
+    add, t2, a, b
+    assign, r, t2
+JOIN:
+    add, t3, a, b
+    add, r, r, t3
+    call, puti, r
+    call, putc, 10
+#end_function

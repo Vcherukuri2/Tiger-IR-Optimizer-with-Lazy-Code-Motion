@@ -1,0 +1,24 @@
+#start_function
+void main():
+int-list: i, s, y, z, t1, t2
+float-list: 
+    callr, y, geti
+    callr, z, geti
+    assign, s, 0
+    assign, i, 0
+    goto, PREHEAD
+PREHEAD:
+    goto, LOOP
+LOOP:
+    brgt, EXIT, i, 10
+    add, t1, s, i
+    add, t2, t1, y
+    add, s, t2, z
+    add, i, i, 1
+    goto, LOOP
+EXIT:
+    add, t1, s, y
+    add, s, t1, z
+    call, puti, s
+    call, putc, 10
+#end_function

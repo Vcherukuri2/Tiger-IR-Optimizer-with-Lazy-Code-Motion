@@ -20,6 +20,11 @@ private int startLine;
 private int endLine;
 private IRFunction function;
 
+    /** Internal phi representation: { "phi", destBaseOrSsa, src0, src1, ... } — not Tiger-IR. */
+    private final List<String[]> phiNodes = new ArrayList<>();
+    /** SSA-renamed instruction sequence for this block (parallel to CFG, not the flat file index). */
+    private List<IRInstruction> ssaIRList = null;
+
     BasicBlock()
     {
         this.instructions = new ArrayList<>();
@@ -119,7 +124,25 @@ private IRFunction function;
         return visited;
     }
 
-    // override equals 
+    List<String[]> getPhiNodes() {
+        return phiNodes;
+    }
+
+    List<IRInstruction> getSsaIRList() {
+        return ssaIRList;
+    }
+
+    void setSsaIRList(List<IRInstruction> ssaIRList) {
+        this.ssaIRList = ssaIRList;
+    }
+
+    /** Clear cached block IR, SSA phis, and SSA instruction list (call before CFG rebuild). */
+    void clearSSAState() {
+        instructions.clear();
+        phiNodes.clear();
+        ssaIRList = null;
+    }
+
     @Override
     public boolean equals(Object obj) {
         if (obj == this) {
@@ -129,20 +152,24 @@ private IRFunction function;
             return false;
         }
         BasicBlock bb = (BasicBlock) obj;
-        return startLine == bb.startLine && endLine == bb.endLine && function.name == bb.function.name;
+        return startLine == bb.startLine && endLine == bb.endLine
+                && function.name.equals(bb.function.name);
     }
-    
+
 }
 
-class CFG {
-    IRFunction function;
-    List<BasicBlock> basicBlocks;
+public class CFG {
+    public IRFunction function;
+    public List<BasicBlock> basicBlocks;
     Map <Integer, BasicBlock> lineToBlock; //startLine to BasicBlock
     Map <String, BasicBlock> labelToBlock; //label to BasicBlock
     Map <IRInstruction, BasicBlock> instrToBlock; //instruction to BasicBlock
 
+    /** Cached loop information (back edges, natural loops, nesting depth). Cleared on rebuildCFG. */
+    private LoopAnalysis.LoopInfo cachedLoopInfo;
 
-     CFG(IRFunction function)
+
+     public CFG(IRFunction function)
     {
         this.function = function;
         this.basicBlocks = new ArrayList<>();
@@ -187,8 +214,6 @@ class CFG {
                             startLNs.add(i+1);
                         
                     }
-                    // next instruction is a leader
-                    // find the instruction that uses the 2nd onwards 
                     break;
                 default:    
                     // this instr is not a leader
@@ -225,7 +250,6 @@ class CFG {
             if (instuctionList.get(startLNs.get(i)).opCode == OpCode.LABEL) {
                 String label = ((IRLabelOperand) instuctionList.get(startLNs.get(i)).operands[0]).getName();
                 labelToBlock.put(label, bb);
-                // labelToBlock.put(instuctionList.get(startLNs.get(i)).operands[0].toString(), bb);
             }
         }
 
@@ -240,9 +264,6 @@ class CFG {
                     case BRGT:
                     case BRLEQ:
                     case BRGEQ:
-                        // 1. a branch then 
-                        // connect it w tha target (if the branch is taken)
-                        // connect it w the next instruction (if the branch is not taken) -- if it exists!
                         String branch_label = ((IRLabelOperand) currIns.operands[0]).getName();
                         BasicBlock target_brnach = labelToBlock.get(branch_label);
                         bb.addSuccessor(target_brnach);
@@ -255,16 +276,12 @@ class CFG {
                         }
                         break;
                     case GOTO:
-                        // 2. a goto then 
-                        // connect it w the target of the goto 
                         String goto_lable = ((IRLabelOperand) currIns.operands[0]).getName();
                         BasicBlock target_goto = labelToBlock.get(goto_lable);
                         bb.addSuccessor(target_goto);
                         target_goto.addPredecessor(bb);
                         break;
                     default:    
-                        // 3. else if not the end of the function,
-                        // connect it w the next instruction after 
                         if (endLine + 1 < n){
                             BasicBlock next_line = lineToBlock.get(endLine+1);
                             bb.addSuccessor(next_line);
@@ -281,6 +298,99 @@ class CFG {
             }
         }
 
+    }
+
+    /**
+     * Recompute the CFG from {@link IRFunction#getInstructions()} after the flat instruction list
+     * was rewritten. This is the canonical repair entry point: any pass that mutates
+     * {@code function.instructions} should finish by calling {@code rebuildCFG()} (and, when
+     * leaving SSA with {@code debug}, {@link #assertFlatInvariants()}).
+     */
+    public void rebuildCFG() {
+        for (BasicBlock bb : basicBlocks) {
+            bb.clearSSAState();
+        }
+        basicBlocks.clear();
+        lineToBlock.clear();
+        labelToBlock.clear();
+        instrToBlock.clear();
+        cachedLoopInfo = null;
+        buildCFG();
+    }
+
+    /** @return cached {@link LoopAnalysis.LoopInfo}, or {@code null} if no pass has computed it yet. */
+    public LoopAnalysis.LoopInfo getLoopInfo() {
+        return cachedLoopInfo;
+    }
+
+    /** Set by {@link LoopAnalysis#analyze(CFG)}. Cleared by {@link #rebuildCFG()}. */
+    void setLoopInfo(LoopAnalysis.LoopInfo info) {
+        this.cachedLoopInfo = info;
+    }
+
+    /**
+     * Validates flat Tiger-IR + CFG shape after {@link #rebuildCFG()} (e.g. end of
+     * {@link SSABuilder#leavingSSA(CFG, boolean)} with {@code debug=true}).
+     * Branch label resolution uses {@link #labelToBlock} as the canonical label→block map.
+     */
+    public void assertFlatInvariants() {
+        if (basicBlocks.isEmpty()) {
+            return;
+        }
+        BasicBlock entry = basicBlocks.get(0);
+        List<IRInstruction> prog = function.getInstructions();
+
+        for (BasicBlock bb : basicBlocks) {
+            List<IRInstruction> ins = new ArrayList<>(bb.getInstructions());
+            if (ins.isEmpty()) {
+                throw new IllegalStateException(
+                        "assertFlatInvariants: empty basic block [" + bb.getStartLine() + ".." + bb.getEndLine()
+                                + "] in function " + function.name);
+            }
+        }
+
+        for (BasicBlock bb : basicBlocks) {
+            if (bb != entry && bb.getPredecessors().isEmpty()) {
+                throw new IllegalStateException(
+                        "assertFlatInvariants: non-entry block [" + bb.getStartLine() + ".." + bb.getEndLine()
+                                + "] has no predecessors in function " + function.name);
+            }
+        }
+
+        for (IRInstruction inst : prog) {
+            switch (inst.opCode) {
+                case GOTO:
+                case BREQ:
+                case BRNEQ:
+                case BRLT:
+                case BRGT:
+                case BRLEQ:
+                case BRGEQ: {
+                    String lab = ((IRLabelOperand) inst.operands[0]).getName();
+                    if (!labelToBlock.containsKey(lab)) {
+                        throw new IllegalStateException(
+                                "assertFlatInvariants: branch/goto to undefined label '" + lab + "' in function "
+                                        + function.name);
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        for (IRInstruction inst : prog) {
+            for (IROperand op : inst.operands) {
+                if (op instanceof IRVariableOperand) {
+                    String n = ((IRVariableOperand) op).getName();
+                    if (n.indexOf('#') >= 0) {
+                        throw new IllegalStateException(
+                                "assertFlatInvariants: variable '" + n + "' still contains '#' in function "
+                                        + function.name + " at " + inst);
+                    }
+                }
+            }
+        }
     }
 
     void dumpCFG()
@@ -302,5 +412,3 @@ class CFG {
     }
 
 }
-
-

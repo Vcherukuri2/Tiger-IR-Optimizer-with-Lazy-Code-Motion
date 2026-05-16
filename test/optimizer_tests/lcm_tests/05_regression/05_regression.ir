@@ -1,0 +1,17 @@
+#start_function
+void main():
+int-list: a, d, r0, r1, t1, t3, b, c
+float-list: 
+    callr, a, geti
+    callr, d, geti
+    callr, r0, geti
+    callr, r1, geti
+    add, t1, r0, r1
+    add, b, t1, a
+    add, t3, r0, r1
+    add, c, t3, d
+    call, puti, b
+    call, putc, 10
+    call, puti, c
+    call, putc, 10
+#end_function
